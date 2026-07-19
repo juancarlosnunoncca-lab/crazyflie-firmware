@@ -54,6 +54,11 @@ float qx = 0.0f;
 float qy = 0.0f;
 float qz = 0.0f;  // quaternion of sensor frame relative to auxiliary frame
 
+static float miRoll = 0.0f;
+static float miPitch = 0.0f;
+static float miYaw = 0.0f;
+
+
 static float gravX, gravY, gravZ; // Unit vector in the estimated gravity direction
 
 // The acc in Z for static position (g)
@@ -87,6 +92,7 @@ bool sensfusion6Test(void)
 
 void sensfusion6UpdateQ(float gx, float gy, float gz, float ax, float ay, float az, float dt)
 {
+  // 1. Ejecutamos el filtro original de fondo por seguridad del sistema
   sensfusion6UpdateQImpl(gx, gy, gz, ax, ay, az, dt);
   estimatedGravityDirection(&gravX, &gravY, &gravZ);
 
@@ -94,6 +100,23 @@ void sensfusion6UpdateQ(float gx, float gy, float gz, float ax, float ay, float 
     baseZacc = sensfusion6GetAccZ(ax, ay, az);
     isCalibrated = true;
   }
+
+  // 2. TU FILTRO COMPLEMENTARIO (98/2)
+  // Calculamos la inclinación según el acelerómetro usando trigonometría (en grados)
+  float roll_acc = atan2f(ay, az) * 180.0f / M_PI_F;
+  float pitch_acc = atan2f(-ax, sqrtf(ay * ay + az * az)) * 180.0f / M_PI_F;
+
+  // Tu ecuación matemática: 98% Giroscopio (integrado) + 2% Acelerómetro
+  // (En esta parte del firmware, gx y gy ya vienen en grados/segundo)
+  miRoll  = 0.98f * (miRoll + gx * dt) + 0.02f * roll_acc;
+  miPitch = 0.98f * (miPitch + gy * dt) + 0.02f * pitch_acc;
+
+  // Tu integración pura para el Yaw en el eje Z
+  miYaw += gz * dt;
+
+  // Ajuste para que el Yaw se mantenga siempre entre -180 y 180 grados
+  if (miYaw > 180.0f)  miYaw -= 360.0f;
+  if (miYaw < -180.0f) miYaw += 360.0f;
 }
 
 #ifdef CONFIG_IMU_MADGWICK_QUATERNION
@@ -262,16 +285,10 @@ void sensfusion6GetQuaternion(float* q_x, float* q_y, float* q_z, float* q_w)
 
 void sensfusion6GetEulerRPY(float* roll, float* pitch, float* yaw)
 {
-  float gx = gravX;
-  float gy = gravY;
-  float gz = gravZ;
-
-  if (gx>1) gx=1;
-  if (gx<-1) gx=-1;
-
-  *yaw = atan2f(2*(qw*qz + qx*qy), qw*qw + qx*qx - qy*qy - qz*qz) * 180 / M_PI_F;
-  *pitch = asinf(gx) * 180 / M_PI_F; //Pitch seems to be inverted
-  *roll = atan2f(gy, gz) * 180 / M_PI_F;
+  // Le entregamos directamente los ángulos calculados por TU filtro
+  *roll  = miRoll;
+  *pitch = miPitch;
+  *yaw   = miYaw;
 }
 
 float sensfusion6GetAccZWithoutGravity(const float ax, const float ay, const float az)
@@ -382,3 +399,4 @@ PARAM_ADD_CORE(PARAM_FLOAT | PARAM_PERSISTENT, ki, &twoKi)
 #endif
 PARAM_ADD(PARAM_FLOAT, baseZacc, &baseZacc)
 PARAM_GROUP_STOP(sensfusion6)
+
